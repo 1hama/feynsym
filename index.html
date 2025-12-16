@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Random φ³/φ⁴ Feynman Diagram Generator</title>
+  <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+  <style>
+    body { font-family: sans-serif; }
+    #cy { width: 800px; height: 500px; border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+
+<h3>Random Feynman Diagram</h3>
+
+<div>
+  <label><input type="checkbox" id="allowTadpole" checked /> allow tadpole</label>
+  <label><input type="checkbox" id="allowPhi3" checked /> allow φ³</label>
+  <label><input type="checkbox" id="allowPhi4" checked /> allow φ⁴</label>
+</div>
+
+<button id="generate">Generate</button>
+<p id="stats"></p>
+<div id="cy"></div>
+
+<script>
+/********************
+ * Global parameters
+ ********************/
+const PARAMS = {
+  minVertices: 3,
+  maxVertices: 6,
+  maxExternalLegs: 4,
+  multiEdgeCurve: 120
+};
+
+let cy = cytoscape({
+  container: document.getElementById('cy'),
+  style: [
+    {
+      selector: 'node',
+      style: {
+        'width': 14,
+        'height': 14,
+        'background-color': '#000',
+        'label': ''
+      }
+    },
+    {
+      selector: 'edge',
+      style: {
+        'line-color': '#000',
+        'curve-style': 'bezier',
+        'control-point-distance': 'data(curve)',
+        'width': 2
+      }
+    }
+  ]
+});
+
+/********************
+ * Utility functions
+ ********************/
+function randomInt(a, b) {
+  return Math.floor(Math.random() * (b - a + 1)) + a;
+}
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+/********************
+ * Connectivity check
+ ********************/
+function isConnected(vertices, edges) {
+  if (vertices.length === 0) return true;
+  const adj = {};
+  vertices.forEach(v => adj[v.id] = []);
+  edges.forEach(e => {
+    adj[e.source].push(e.target);
+    adj[e.target].push(e.source);
+  });
+
+  const visited = new Set();
+  const stack = [vertices[0].id];
+
+  while (stack.length) {
+    const v = stack.pop();
+    if (visited.has(v)) continue;
+    visited.add(v);
+    adj[v].forEach(u => {
+      if (!visited.has(u)) stack.push(u);
+    });
+  }
+  return visited.size === vertices.length;
+}
+
+/********************
+ * Diagram generator
+ ********************/
+function generateDiagram(opts) {
+  let diagram;
+  do {
+    const V = randomInt(PARAMS.minVertices, PARAMS.maxVertices);
+    const vertices = [];
+    for (let i = 0; i < V; i++) vertices.push({ id: 'v' + i });
+
+    const allowed = [];
+    if (opts.allowPhi3) allowed.push(3);
+    if (opts.allowPhi4) allowed.push(4);
+    if (allowed.length === 0) throw new Error('No interaction allowed');
+
+    const stubs = [];
+    vertices.forEach(v => {
+      const deg = allowed[randomInt(0, allowed.length - 1)];
+      for (let i = 0; i < deg; i++) stubs.push(v.id);
+    });
+
+    shuffle(stubs);
+
+    const internalEdges = [];
+    let externalCount = 0;
+
+    while (stubs.length >= 2) {
+      const a = stubs.pop();
+      const b = stubs.pop();
+      if (!opts.allowTadpole && a === b) {
+        stubs.unshift(a, b);
+        shuffle(stubs);
+        continue;
+      }
+      internalEdges.push({ source: a, target: b });
+    }
+
+    if (stubs.length === 1) externalCount = 1;
+
+    diagram = { vertices, internalEdges, externalCount };
+  } while (!isConnected(diagram.vertices, diagram.internalEdges)
+           || diagram.externalCount > PARAMS.maxExternalLegs);
+
+  return diagram;
+}
+
+/********************
+ * Symmetry factor
+ ********************/
+function symmetryFactor(diagram) {
+  const n = diagram.vertices.length;
+
+  // build adjacency matrix A and external vector e
+  const index = {};
+  diagram.vertices.forEach((v, i) => index[v.id] = i);
+
+  const A = Array.from({ length: n }, () => Array(n).fill(0));
+  diagram.internalEdges.forEach(e => {
+    const i = index[e.source];
+    const j = index[e.target];
+    if (i === j) {
+      A[i][i] += 1;
+    } else {
+      A[i][j] += 1;
+      A[j][i] += 1;
+    }
+  });
+
+  const ext = Array(n).fill(0);
+  // external legs are distinguished: ext[i] already fixed per vertex
+  if (diagram.externalPerVertex) {
+    diagram.externalPerVertex.forEach((v, i) => ext[i] = v);
+  }
+
+  // generate all permutations of [0,...,n-1]
+  function permute(arr) {
+    if (arr.length <= 1) return [arr];
+    const res = [];
+    for (let i = 0; i < arr.length; i++) {
+      const rest = arr.slice(0, i).concat(arr.slice(i + 1));
+      for (const p of permute(rest)) {
+        res.push([arr[i]].concat(p));
+      }
+    }
+    return res;
+  }
+
+  const perms = permute([...Array(n).keys()]);
+
+  let aut = 0;
+
+  for (const pi of perms) {
+    let ok = true;
+
+    // check external legs
+    for (let i = 0; i < n; i++) {
+      if (ext[i] !== ext[pi[i]]) { ok = false; break; }
+    }
+    if (!ok) continue;
+
+    // check adjacency matrix
+    for (let i = 0; i < n && ok; i++) {
+      for (let j = 0; j < n; j++) {
+        if (A[i][j] !== A[pi[i]][pi[j]]) { ok = false; break; }
+      }
+    }
+
+    if (ok) aut++;
+  }
+
+  // local edge factors
+  let edgeFactor = 1;
+  function fact(k) { let r = 1; for (let i = 2; i <= k; i++) r *= i; return r; }
+
+  for (let i = 0; i < n; i++) {
+    // tadpoles
+    if (A[i][i] > 0) edgeFactor *= fact(A[i][i]) * (2 ** A[i][i]);
+    for (let j = i + 1; j < n; j++) {
+      if (A[i][j] > 0) edgeFactor *= fact(A[i][j]);
+    }
+  }
+
+  return aut * edgeFactor;
+}
+
+/********************
+ * Drawing
+ ********************/
+function drawDiagram(diagram) {
+  const elements = [];
+
+  diagram.vertices.forEach((v, i) => {
+    const angle = 2 * Math.PI * i / diagram.vertices.length;
+    elements.push({
+      data: { id: v.id },
+      position: {
+        x: 400 + 150 * Math.cos(angle),
+        y: 250 + 150 * Math.sin(angle)
+      }
+    });
+  });
+
+  diagram.internalEdges.forEach((e, i) => {
+    elements.push({
+      data: {
+        id: 'e' + i,
+        source: e.source,
+        target: e.target,
+        curve: (i % 2 === 0 ? PARAMS.multiEdgeCurve : 0)
+      }
+    });
+  });
+
+  cy.elements().remove();
+  cy.add(elements);
+  cy.fit();
+
+  const S = symmetryFactor(diagram);
+
+  document.getElementById('stats').textContent =
+    `Vertices: ${diagram.vertices.length}, ` +
+    `Internal edges: ${diagram.internalEdges.length}, ` +
+    `External legs ≤ ${PARAMS.maxExternalLegs}, ` +
+    `Symmetry factor: ${S}`;
+
+  console.log('Generated diagram:', JSON.stringify(diagram, null, 2));
+}
+
+/********************
+ * UI hook
+ ********************/
+document.getElementById('generate').onclick = () => {
+  const opts = {
+    allowTadpole: document.getElementById('allowTadpole').checked,
+    allowPhi3: document.getElementById('allowPhi3').checked,
+    allowPhi4: document.getElementById('allowPhi4').checked
+  };
+
+  const d = generateDiagram(opts);
+  drawDiagram(d);
+};
+
+/********************
+ * Basic sanity tests
+ ********************/
+// simple connectivity test
+console.assert(
+  isConnected([{id:'a'},{id:'b'}],[{source:'a',target:'b'}]) === true,
+  'Connectivity test failed'
+);
+</script>
+
+</body>
+</html>

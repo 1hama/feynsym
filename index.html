@@ -137,10 +137,13 @@
     <label><input type="checkbox" id="allowTadpole" checked /> allow tadpole</label>
     <label><input type="checkbox" id="allowPhi3" checked /> allow φ³</label>
     <label><input type="checkbox" id="allowPhi4" checked /> allow φ⁴</label>
+    <label><input type="checkbox" id="allowExternalLegs" checked /> allow external legs</label>
   </div>
 
   <button id="generate">Generate</button>
   <p id="stats"></p>
+  <button id="showSymmetry" style="display:none; margin: 0 auto 18px auto; padding: 8px 24px; font-size: 1rem; font-weight: 500; color: #fff; background: linear-gradient(90deg, #6366f1 60%, #3b82f6 100%); border: none; border-radius: 8px; box-shadow: 0 2px 8px rgba(60,80,120,0.08); cursor: pointer;">Show Symmetry Factor</button>
+  <div id="symmetryFactor" style="display:none; text-align:center; font-size:1.15rem; margin-bottom:12px; color:#4b5563;"></div>
   <div id="cy"></div>
 </div>
 
@@ -177,10 +180,30 @@ let cy = cytoscape({
         'width': 2,
         'overlay-opacity': 0
       }
+    },
+    {
+      selector: 'node.external',
+      style: {
+        'background-color': 'rgba(255, 255, 255, 1)',
+        'width': 10,
+        'height': 10,
+        'border-width': 2,
+        'border-color': 'rgba(0, 0, 0, 1)',
+        'label': '',
+        'opacity': 1
+      }
+    },
+    {
+      selector: 'edge.external-leg',
+      style: {
+        'line-color': 'rgba(0, 0, 0, 1)',
+        'width': 2,
+        // 'line-style': 'dashed'
+      }
     }
   ],
-  panningEnabled: false,         // Prevent canvas panning
-  userPanningEnabled: false      // Prevent user from panning with mouse/touch
+  panningEnabled: false,
+  userPanningEnabled: false
 });
 
 /********************
@@ -228,7 +251,15 @@ function isConnected(vertices, edges) {
  ********************/
 function generateDiagram(opts) {
   let diagram;
+  let attempts = 0;
+  const MAX_ATTEMPTS = 1000; // Prevent infinite loops
+
   do {
+    attempts++;
+    if (attempts > MAX_ATTEMPTS) {
+      throw new Error('Failed to generate diagram: too many attempts (possibly impossible constraints)');
+    }
+
     const V = randomInt(PARAMS.minVertices, PARAMS.maxVertices);
     const vertices = [];
     for (let i = 0; i < V; i++) vertices.push({ id: 'v' + i });
@@ -238,34 +269,67 @@ function generateDiagram(opts) {
     if (opts.allowPhi4) allowed.push(4);
     if (allowed.length === 0) throw new Error('No interaction allowed');
 
+    // Assign degrees and stubs
     const stubs = [];
     vertices.forEach(v => {
       const deg = allowed[randomInt(0, allowed.length - 1)];
       for (let i = 0; i < deg; i++) stubs.push(v.id);
     });
 
-    shuffle(stubs);
+    // Randomly select number of external legs, but only accept if parity matches
+    let numExternalLegs, parityAttempts = 0, MAX_PARITY_ATTEMPTS = 100;
+    const totalStubs = stubs.length;
+    do {
+      numExternalLegs = randomInt(0, PARAMS.maxExternalLegs);
+      parityAttempts++;
+      if (parityAttempts > MAX_PARITY_ATTEMPTS) break;
+    } while ((totalStubs - numExternalLegs) % 2 !== 0 || numExternalLegs > totalStubs);
 
-    const internalEdges = [];
-    let externalCount = 0;
-    let externalLegVertex = null;
-    while (stubs.length >= 2) {
-      const a = stubs.pop();
-      const b = stubs.pop();
-      if (!opts.allowTadpole && a === b) {
-        stubs.unshift(a, b);
-        shuffle(stubs);
-        continue;
+    if (numExternalLegs > totalStubs) continue; // skip impossible cases
+
+    // Shuffle stubs and set aside external legs
+    let stubsCopy = stubs.slice();
+    shuffle(stubsCopy);
+    let externalLegs = stubsCopy.splice(0, numExternalLegs);
+
+    // Try to pair remaining stubs without tadpoles
+    let internalEdges = [];
+    let stubAttempts = 0;
+    const MAX_STUB_ATTEMPTS = 500;
+    let success = false;
+    while (stubAttempts < MAX_STUB_ATTEMPTS) {
+      stubAttempts++;
+      let tempStubs = stubsCopy.slice();
+      shuffle(tempStubs);
+      let tempEdges = [];
+      let valid = true;
+      while (tempStubs.length >= 2) {
+        const a = tempStubs.pop();
+        const b = tempStubs.pop();
+        if (!opts.allowTadpole && a === b) {
+          valid = false;
+          break;
+        }
+        tempEdges.push({ source: a, target: b });
       }
-      internalEdges.push({ source: a, target: b });
+      if (valid && tempStubs.length === 0) {
+        internalEdges = tempEdges;
+        success = true;
+        break;
+      }
     }
-    if (stubs.length === 1) {
-      externalCount = 1;
-      externalLegVertex = stubs[0];
-    }
-    diagram = { vertices, internalEdges, externalCount, externalLegVertex };
+    if (!success) continue;
+
+    // Count external legs per vertex
+    const externalPerVertex = Array(vertices.length).fill(0);
+    externalLegs.forEach(vId => {
+      const idx = vertices.findIndex(v => v.id === vId);
+      if (idx >= 0) externalPerVertex[idx]++;
+    });
+
+    diagram = { vertices, internalEdges, externalLegs, externalPerVertex };
   } while (!isConnected(diagram.vertices, diagram.internalEdges)
-           || diagram.externalCount > PARAMS.maxExternalLegs);
+           || diagram.externalLegs.length > PARAMS.maxExternalLegs);
 
   return diagram;
 }
@@ -405,17 +469,102 @@ function drawDiagram(diagram) {
     });
   });
 
+
+  // Draw external legs: for each external leg, add a new external node and an edge from the vertex to this node
+  if (diagram.externalLegs && diagram.externalLegs.length > 0) {
+    // Count how many external legs are attached to each vertex
+    const extLegsByVertex = {};
+    diagram.externalLegs.forEach((vId, i) => {
+      if (!extLegsByVertex[vId]) extLegsByVertex[vId] = [];
+      extLegsByVertex[vId].push(i);
+    });
+
+    diagram.externalLegs.forEach((vId, i) => {
+      const extId = 'ext' + i;
+      // Find the vertex index for angle placement
+      const vIdx = diagram.vertices.findIndex(v => v.id === vId);
+      const baseAngle = 2 * Math.PI * vIdx / diagram.vertices.length;
+      // Spread external legs around the parent node if multiple are attached
+      const siblings = extLegsByVertex[vId];
+      const nSiblings = siblings.length;
+      const myIdx = siblings.indexOf(i);
+      // Spread in a small arc (e.g., ±25 degrees)
+      const spread = Math.PI / 6; // 30 degrees total
+      let angle = baseAngle;
+      if (nSiblings > 1) {
+        angle = baseAngle + spread * (myIdx - (nSiblings - 1) / 2) / (nSiblings > 1 ? (nSiblings - 1) : 1);
+      }
+      elements.push({
+        data: { id: extId },
+        position: {
+          x: 400 + 200 * Math.cos(angle),
+          y: 250 + 200 * Math.sin(angle)
+        },
+        classes: 'external'
+      });
+      elements.push({
+        data: {
+          id: 'leg' + i,
+          source: vId,
+          target: extId,
+          curve: 0
+        },
+        classes: 'external-leg'
+      });
+    });
+  }
+
+
   cy.elements().remove();
   cy.add(elements);
   cy.fit();
 
+  // --- Sync external node positions when internal node is moved ---
+  // Store offset between internal and external nodes at drag start
+  let extOffsets = {};
+  cy.nodes().not('.external').on('grab', function(evt) {
+    const node = evt.target;
+    extOffsets[node.id()] = [];
+    node.connectedEdges().forEach(function(edge) {
+      const extNode = edge.target().hasClass('external') ? edge.target() : (edge.source().hasClass('external') ? edge.source() : null);
+      if (extNode) {
+        const dx = extNode.position('x') - node.position('x');
+        const dy = extNode.position('y') - node.position('y');
+        extOffsets[node.id()].push({ extId: extNode.id(), dx, dy });
+      }
+    });
+  });
+  cy.nodes().not('.external').on('position', function(evt) {
+    const node = evt.target;
+    const offsets = extOffsets[node.id()];
+    if (!offsets) return;
+    offsets.forEach(function(offset) {
+      const extNode = cy.getElementById(offset.extId);
+      if (extNode && extNode.nonempty()) {
+        extNode.position({
+          x: node.position('x') + offset.dx,
+          y: node.position('y') + offset.dy
+        });
+      }
+    });
+  });
+  cy.nodes().not('.external').on('free', function(evt) {
+    const node = evt.target;
+    delete extOffsets[node.id()];
+  });
+
+  // Hide symmetry factor and show the button
+  document.getElementById('symmetryFactor').style.display = 'none';
+  document.getElementById('showSymmetry').style.display = 'block';
+
+  // Store symmetry factor for later reveal
   const S = symmetryFactor(diagram);
+  document.getElementById('symmetryFactor').textContent = `Symmetry factor: ${S}`;
 
   document.getElementById('stats').textContent =
     `Vertices: ${diagram.vertices.length}, ` +
     `Internal edges: ${diagram.internalEdges.length}, ` +
-    `External legs ≤ ${PARAMS.maxExternalLegs}, ` +
-    `Symmetry factor: ${S}`;
+    `External legs: ${diagram.externalLegs ? diagram.externalLegs.length : 0} (max ${PARAMS.maxExternalLegs})`;
 
   console.log('Generated diagram:', JSON.stringify(diagram, null, 2));
 }
@@ -423,15 +572,28 @@ function drawDiagram(diagram) {
 /********************
  * UI hook
  ********************/
+
 document.getElementById('generate').onclick = () => {
   const opts = {
     allowTadpole: document.getElementById('allowTadpole').checked,
     allowPhi3: document.getElementById('allowPhi3').checked,
-    allowPhi4: document.getElementById('allowPhi4').checked
+    allowPhi4: document.getElementById('allowPhi4').checked,
+    allowExternalLegs: document.getElementById('allowExternalLegs').checked
   };
-
+  // Hide symmetry factor and button until new diagram is drawn
+  document.getElementById('symmetryFactor').style.display = 'none';
+  document.getElementById('showSymmetry').style.display = 'none';
+  // Set PARAMS.maxExternalLegs depending on option
+  const prevMaxExternalLegs = PARAMS.maxExternalLegs;
+  PARAMS.maxExternalLegs = opts.allowExternalLegs ? 4 : 0;
   const d = generateDiagram(opts);
   drawDiagram(d);
+  PARAMS.maxExternalLegs = prevMaxExternalLegs; // restore for next time
+};
+
+document.getElementById('showSymmetry').onclick = () => {
+  document.getElementById('symmetryFactor').style.display = 'block';
+  document.getElementById('showSymmetry').style.display = 'none';
 };
 
 /********************

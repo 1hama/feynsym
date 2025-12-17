@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Random φ³/φ⁴ Feynman Diagram Generator</title>
   <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
   <style>
@@ -121,6 +122,8 @@
       }
       .controls {
         gap: 10px;
+        flex-direction: column; /* Stack vertically on small screens */
+        align-items: stretch;   /* Make buttons fill width */
       }
       #cy {
         height: 320px;
@@ -419,13 +422,29 @@ function symmetryFactor(diagram) {
 function drawDiagram(diagram) {
   const elements = [];
 
+  // --- Responsive centering ---
+  // Get the size of the Cytoscape container
+  const cyContainer = document.getElementById('cy');
+  let centerX = 400, centerY = 250, radius = 150, extRadius = 200;
+  if (window.innerWidth <= 600) {
+    // On small screens, use the actual container size
+    const rect = cyContainer.getBoundingClientRect();
+    centerX = rect.width / 2;
+    centerY = rect.height / 2;
+    radius = Math.min(centerX, centerY) - 60;
+    extRadius = radius + 50;
+    // Clamp radius to avoid negative values
+    if (radius < 40) radius = 40;
+    if (extRadius < 60) extRadius = 60;
+  }
+
   diagram.vertices.forEach((v, i) => {
     const angle = 2 * Math.PI * i / diagram.vertices.length;
     elements.push({
       data: { id: v.id },
       position: {
-        x: 400 + 150 * Math.cos(angle),
-        y: 250 + 150 * Math.sin(angle)
+        x: centerX + radius * Math.cos(angle),
+        y: centerY + radius * Math.sin(angle)
       }
     });
   });
@@ -497,8 +516,8 @@ function drawDiagram(diagram) {
       elements.push({
         data: { id: extId },
         position: {
-          x: 400 + 200 * Math.cos(angle),
-          y: 250 + 200 * Math.sin(angle)
+          x: centerX + extRadius * Math.cos(angle),
+          y: centerY + extRadius * Math.sin(angle)
         },
         classes: 'external'
       });
@@ -564,7 +583,7 @@ function drawDiagram(diagram) {
   document.getElementById('stats').textContent =
     `Vertices: ${diagram.vertices.length}, ` +
     `Internal edges: ${diagram.internalEdges.length}, ` +
-    `External legs: ${diagram.externalLegs ? diagram.externalLegs.length : 0} (max ${PARAMS.maxExternalLegs})`;
+    `External legs: ${diagram.externalLegs ? diagram.externalLegs.length : 0}`;
 
   console.log('Generated diagram:', JSON.stringify(diagram, null, 2));
 }

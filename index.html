@@ -114,16 +114,34 @@
       }
     }
     @media (max-width: 600px) {
-      .container {
-        padding: 10px 2vw 10px 2vw;
-      }
-      h3 {
-        font-size: 1.3rem;
-      }
       .controls {
         gap: 10px;
-        flex-direction: column; /* Stack vertically on small screens */
-        align-items: stretch;   /* Make buttons fill width */
+        flex-direction: column;
+        align-items: stretch;
+      }
+      #controls-desktop {
+        display: none !important;
+      }
+      #controls-mobile {
+        display: flex !important;
+        margin-top: 18px;
+        margin-bottom: 0;
+      }
+      .stats-desktop {
+        display: none !important;
+      }
+      .stats-mobile {
+        display: block !important;
+        text-align: center;
+        font-size: 1.08rem;
+        margin: 12px 0 18px 0;
+        color: #374151;
+        background: #f3f6fa;
+        border-radius: 6px;
+        padding: 8px 0;
+        letter-spacing: 0.01em;
+        min-height: 1.5em;
+        box-shadow: 0 1px 2px rgba(60,80,120,0.04);
       }
       #cy {
         height: 320px;
@@ -134,9 +152,9 @@
 <body>
 
 <div class="container">
-  <h3>Random Feynman Diagram</h3>
+  <h3>Guess Symmetry Factor</h3>
 
-  <div class="controls">
+  <div class="controls" id="controls-desktop">
     <label><input type="checkbox" id="allowTadpole" checked /> allow tadpole</label>
     <label><input type="checkbox" id="allowPhi3" checked /> allow φ³</label>
     <label><input type="checkbox" id="allowPhi4" checked /> allow φ⁴</label>
@@ -144,10 +162,21 @@
   </div>
 
   <button id="generate">Generate</button>
-  <p id="stats"></p>
+  <!-- Move #stats for mobile below #cy, keep here for desktop -->
+  <p id="stats" class="stats-desktop"></p>
   <button id="showSymmetry" style="display:none; margin: 0 auto 18px auto; padding: 8px 24px; font-size: 1rem; font-weight: 500; color: #fff; background: linear-gradient(90deg, #6366f1 60%, #3b82f6 100%); border: none; border-radius: 8px; box-shadow: 0 2px 8px rgba(60,80,120,0.08); cursor: pointer;">Show Symmetry Factor</button>
   <div id="symmetryFactor" style="display:none; text-align:center; font-size:1.15rem; margin-bottom:12px; color:#4b5563;"></div>
   <div id="cy"></div>
+
+  <!-- Mobile stats: hidden by default, shown only on smartphones -->
+  <p id="stats-mobile" class="stats-mobile" style="display:none;"></p>
+  <!-- Mobile controls: hidden by default, shown only on smartphones -->
+  <div class="controls" id="controls-mobile" style="display:none;">
+    <label><input type="checkbox" id="allowTadpole-mobile" checked /> allow tadpole</label>
+    <label><input type="checkbox" id="allowPhi3-mobile" checked /> allow φ³</label>
+    <label><input type="checkbox" id="allowPhi4-mobile" checked /> allow φ⁴</label>
+    <label><input type="checkbox" id="allowExternalLegs-mobile" checked /> allow external legs</label>
+  </div>
 </div>
 
 <script>
@@ -203,7 +232,7 @@ let cy = cytoscape({
         'width': 2,
         // 'line-style': 'dashed'
       }
-    }
+    },
   ],
   panningEnabled: false,
   userPanningEnabled: false
@@ -580,10 +609,12 @@ function drawDiagram(diagram) {
   const S = symmetryFactor(diagram);
   document.getElementById('symmetryFactor').textContent = `Symmetry factor: ${S}`;
 
-  document.getElementById('stats').textContent =
+  const statsText =
     `Vertices: ${diagram.vertices.length}, ` +
     `Internal edges: ${diagram.internalEdges.length}, ` +
     `External legs: ${diagram.externalLegs ? diagram.externalLegs.length : 0}`;
+  document.getElementById('stats').textContent = statsText;
+  document.getElementById('stats-mobile').textContent = statsText;
 
   console.log('Generated diagram:', JSON.stringify(diagram, null, 2));
 }
@@ -593,11 +624,14 @@ function drawDiagram(diagram) {
  ********************/
 
 document.getElementById('generate').onclick = () => {
+  // Use mobile controls if visible, otherwise desktop
+  const isMobile = window.innerWidth <= 600;
+  const prefix = isMobile ? '-mobile' : '';
   const opts = {
-    allowTadpole: document.getElementById('allowTadpole').checked,
-    allowPhi3: document.getElementById('allowPhi3').checked,
-    allowPhi4: document.getElementById('allowPhi4').checked,
-    allowExternalLegs: document.getElementById('allowExternalLegs').checked
+    allowTadpole: document.getElementById('allowTadpole' + prefix).checked,
+    allowPhi3: document.getElementById('allowPhi3' + prefix).checked,
+    allowPhi4: document.getElementById('allowPhi4' + prefix).checked,
+    allowExternalLegs: document.getElementById('allowExternalLegs' + prefix).checked
   };
   // Hide symmetry factor and button until new diagram is drawn
   document.getElementById('symmetryFactor').style.display = 'none';
@@ -614,6 +648,16 @@ document.getElementById('showSymmetry').onclick = () => {
   document.getElementById('symmetryFactor').style.display = 'block';
   document.getElementById('showSymmetry').style.display = 'none';
 };
+
+// Sync checkboxes between desktop and mobile controls
+['allowTadpole', 'allowPhi3', 'allowPhi4', 'allowExternalLegs'].forEach(id => {
+  const desktop = document.getElementById(id);
+  const mobile = document.getElementById(id + '-mobile');
+  if (desktop && mobile) {
+    desktop.addEventListener('change', () => { mobile.checked = desktop.checked; });
+    mobile.addEventListener('change', () => { desktop.checked = mobile.checked; });
+  }
+});
 
 /********************
  * Basic sanity tests
